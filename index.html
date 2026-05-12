@@ -4,6 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Comidadle — ¿De dónde es esta comida?</title>
+  <!-- Google Analytics -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-DB6VQBTDDM"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-DB6VQBTDDM');
+  </script>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌶️</text></svg>">
   <meta name="description" content="El juego diario de gastronomía hispana. Adivina el país de origen del plato del día en 6 intentos.">
   <meta property="og:title" content="Comidadle 🌶️">
@@ -413,7 +421,7 @@ function showResult(won,animate){
   const line=won?`¡Acertaste en ${log.length} intento${log.length!==1?"s":""}!`:"¡Mañana más!";
   const hardCount=[cfg.fewAttempts,cfg.moreCountries,cfg.noHints].filter(Boolean).length;
   const hardLine=hardCount>0?"\n"+`🔥 Modo difícil x${hardCount}`:"";
-  shareText=`🌶️ Comidadle — ${dish.name}\n${emojiStr}\n${line}${streakLine?" · "+streakLine:""}${hardLine}\n👉 comidadle.netlify.app`;
+  shareText=`🌶️ Comidadle — ${dish.name}\n${emojiStr}\n${line}${streakLine?" · "+streakLine:""}${hardLine}\n👉 aanas440.github.io/comidadle`;
   const box=document.createElement("div");box.className="result-box";if(!animate)box.style.animation="none";
   box.innerHTML=`<span class="result-big">${won?"🎉":"😔"}</span><div class="result-title">${won?`¡Correcto! Es ${dish.flag} ${dish.country}`:`Era ${dish.flag} ${dish.country}`}</div><div class="result-sub">${won?`¡Acertaste en ${log.length} intento${log.length!==1?"s":""}!`:"¡Mañana más! Vuelve para un nuevo plato."}</div><div class="emoji-row">${emojiStr}</div>${streakData.streak>1?`<div style="font-size:13px;color:var(--accent);font-weight:600;margin-bottom:.75rem">🔥 Racha de ${streakData.streak} días</div>`:""}<div class="countdown-box"><div class="countdown-label">Próximo plato en</div><div class="countdown-time" id="countdown-time">--:--:--</div></div><button class="share-btn" id="share-btn" style="margin-top:.5rem"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>Compartir resultado</button><button class="infinite-btn" id="start-infinite-btn" style="margin-top:.5rem">♾️ ¿Seguir jugando? Modo Infinito</button>`;
   resultEl.appendChild(box);
