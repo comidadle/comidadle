@@ -131,6 +131,27 @@
     .countdown-label{font-size:11px;color:var(--text-muted);font-weight:600;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px}
     .countdown-time{font-family:'Fraunces',serif;font-size:28px;font-weight:900;color:var(--gold);letter-spacing:2px}
     #confetti-canvas{position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:999}
+    .ranking-modal .modal{max-width:480px}
+    .ranking-title-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem}
+    .ranking-table{width:100%;border-collapse:collapse;margin-top:.5rem}
+    .ranking-table th{font-size:10px;font-weight:700;color:var(--text-muted);letter-spacing:.08em;text-transform:uppercase;padding:.5rem .75rem;text-align:left;border-bottom:1px solid var(--border)}
+    .ranking-table td{padding:.65rem .75rem;font-size:13px;color:var(--text);border-bottom:1px solid var(--border);vertical-align:middle}
+    .ranking-table tr:last-child td{border-bottom:none}
+    .ranking-table tr.me td{background:rgba(255,107,53,0.08);color:var(--accent);font-weight:600}
+    .rank-pos{font-family:'Fraunces',serif;font-size:16px;font-weight:900;color:var(--text-muted);width:32px}
+    .rank-pos.gold{color:#FFB627}
+    .rank-pos.silver{color:#C0C0C0}
+    .rank-pos.bronze{color:#CD7F32}
+    .rank-name{font-weight:600;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .rank-streak{color:var(--accent);font-weight:700;font-family:'Fraunces',serif;font-size:15px}
+    .rank-wins{color:var(--text-muted);font-size:12px}
+    .username-input{width:100%;background:var(--surface2);border:1px solid var(--border-strong);border-radius:var(--r-sm);color:var(--text);font-family:'Plus Jakarta Sans',sans-serif;font-size:14px;padding:.65rem .875rem;margin:.75rem 0;outline:none}
+    .username-input:focus{border-color:var(--accent)}
+    .ranking-btn{display:inline-flex;align-items:center;gap:6px;background:var(--surface2);border:1px solid var(--border-strong);border-radius:var(--r-sm);padding:.5rem .875rem;font-family:'Plus Jakarta Sans',sans-serif;font-size:13px;font-weight:600;color:var(--text);cursor:pointer;transition:border-color .15s,color .15s}
+    .ranking-btn:hover{border-color:var(--accent);color:var(--accent)}
+    .ranking-btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+    .ranking-btn.primary:hover{opacity:.88}
+    .ranking-empty{text-align:center;padding:2rem;color:var(--text-muted);font-size:13px}
     .infinite-btn{width:100%;padding:.75rem;background:var(--surface2);color:var(--text);border:1px solid var(--border-strong);border-radius:var(--r-sm);font-family:'Plus Jakarta Sans',sans-serif;font-size:14px;font-weight:600;cursor:pointer;margin-top:.75rem;transition:border-color .15s,color .15s;display:flex;align-items:center;justify-content:center;gap:8px}
     .infinite-btn:hover{border-color:var(--accent);color:var(--accent)}
     .infinite-section{background:var(--surface);border:1px solid var(--border-strong);border-radius:var(--r);padding:1.25rem;animation:fadeUp .4s ease both}
@@ -226,6 +247,9 @@
     <div class="logo">🌶️ Comida<span class="dot-accent">dle</span></div>
     <div class="header-actions">
       <div class="date-pill" id="date-pill"></div>
+      <button class="icon-btn" id="ranking-open-btn" title="Ranking Global">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg>
+      </button>
       <button class="icon-btn" id="how-open-btn" title="Cómo jugar">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
       </button>
@@ -257,6 +281,20 @@
     <div id="infinite-section"></div>
   </div>
 </main>
+
+<!-- RANKING MODAL -->
+<div class="modal-overlay hidden ranking-modal" id="ranking-modal">
+  <div class="modal">
+    <button class="modal-close" id="ranking-close">✕</button>
+    <div class="ranking-title-row">
+      <div class="modal-title" style="margin-bottom:0">🏆 Ranking Global</div>
+      <button class="ranking-btn" id="ranking-refresh-btn">↻ Actualizar</button>
+    </div>
+    <div id="ranking-username-section"></div>
+    <div id="ranking-list"><div class="ranking-empty">Cargando ranking...</div></div>
+  </div>
+</div>
+
 <div id="stats-bar-bottom" style="max-width:520px;margin:0 auto;padding:0 1.25rem 1.5rem"></div>
 
 <footer>
@@ -312,6 +350,7 @@ try{const s=JSON.parse(localStorage.getItem(STREAK_KEY));if(s)streakData={...str
 
 function saveStreak(){try{localStorage.setItem(STREAK_KEY,JSON.stringify(streakData))}catch(e){}}
 
+async function syncRanking(){try{await upsertRanking();}catch(e){}}
 function updateStreak(won){
   // Only update once per day
   if(streakData.lastDate===todayStr)return;
@@ -414,7 +453,7 @@ function handleGuess(c,btn){
 let shareText="";
 function showResult(won,animate){
   const resultEl=document.getElementById("result");if(resultEl.querySelector(".result-box"))return;
-  updateStreak(won);renderStats();
+  updateStreak(won);renderStats();syncRanking();
   if(animate){if(won){setTimeout(()=>{launchConfetti();playWin();},300);}else{setTimeout(()=>playLose(),300);}}
   const emojiStr=log.map(g=>g?"🟩":"🟥").join("");
   const streakLine=won&&streakData.streak>1?`🔥 Racha de ${streakData.streak} días`:"";
@@ -455,6 +494,13 @@ document.getElementById("copy-btn").addEventListener("click",()=>{
 function openModal(id){document.getElementById(id).classList.remove("hidden");document.body.style.overflow="hidden"}
 function closeModal(id){document.getElementById(id).classList.add("hidden");document.body.style.overflow=""}
 
+document.getElementById("ranking-open-btn").addEventListener("click",()=>openRanking());
+document.getElementById("ranking-close").addEventListener("click",()=>closeModal("ranking-modal"));
+document.getElementById("ranking-refresh-btn").addEventListener("click",async()=>{
+  document.getElementById("ranking-list").innerHTML='<div class="ranking-empty">Cargando...</div>';
+  try{const rows=await fetchRanking();renderRankingList(rows);}catch(e){}
+});
+document.getElementById("ranking-modal").addEventListener("click",e=>{if(e.target.id==="ranking-modal")closeModal("ranking-modal")});
 document.getElementById("how-open-btn").addEventListener("click",()=>openModal("how-modal"));
 document.getElementById("cfg-open-btn").addEventListener("click",()=>openModal("cfg-modal"));
 document.getElementById("how-close").addEventListener("click",()=>closeModal("how-modal"));
@@ -537,6 +583,130 @@ function loadInfiniteDish(infDish) {
     if (nextBtn) nextBtn.addEventListener("click", () => loadInfiniteDish(getRandomDish(infDish.name)));
   }
   renderInf();
+}
+
+// ═══════════════════════════════════════════════════════════
+// SUPABASE RANKING
+// ═══════════════════════════════════════════════════════════
+const SB_URL = "https://dacgheuzlhybesnqjqzn.supabase.co";
+const SB_KEY = "sb_publishable_hZ1V7TNXiAFlENYGfdESyQ_9zXDq5U7";
+const SB_HEADERS = {"Content-Type":"application/json","apikey":SB_KEY,"Authorization":"Bearer "+SB_KEY};
+
+const USERNAME_KEY = "comidadle_username";
+const USER_ID_KEY  = "comidadle_userid";
+let myUsername = localStorage.getItem(USERNAME_KEY) || "";
+let myUserId   = localStorage.getItem(USER_ID_KEY)  || "";
+
+async function sbFetch(path, options={}) {
+  const res = await fetch(SB_URL + path, { headers: SB_HEADERS, ...options });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json().catch(() => null);
+}
+
+async function upsertRanking() {
+  if (!myUsername) return;
+  const data = {
+    streak: streakData.streak,
+    best_streak: streakData.best,
+    wins: streakData.wins,
+    played: streakData.played,
+    updated_at: new Date().toISOString(),
+  };
+  if (myUserId) {
+    // Update existing
+    await sbFetch(`/rest/v1/ranking?id=eq.${myUserId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+  } else {
+    // Insert new
+    const result = await sbFetch("/rest/v1/ranking?select=id", {
+      method: "POST",
+      headers: {...SB_HEADERS, "Prefer":"return=representation"},
+      body: JSON.stringify({...data, username: myUsername}),
+    });
+    if (result && result[0]) {
+      myUserId = result[0].id;
+      localStorage.setItem(USER_ID_KEY, myUserId);
+    }
+  }
+}
+
+async function fetchRanking() {
+  return await sbFetch("/rest/v1/ranking?select=*&order=best_streak.desc&limit=50");
+}
+
+function renderRankingList(rows) {
+  const el = document.getElementById("ranking-list");
+  if (!rows || rows.length === 0) {
+    el.innerHTML = '<div class="ranking-empty">¡Sé el primero en el ranking! 🌶️</div>';
+    return;
+  }
+  const medals = ["🥇","🥈","🥉"];
+  const posClass = ["gold","silver","bronze"];
+  el.innerHTML = `<table class="ranking-table">
+    <thead><tr>
+      <th>#</th><th>Jugador</th><th>🔥 Racha</th><th>✅ Victorias</th>
+    </tr></thead>
+    <tbody>${rows.map((r,i) => {
+      const isMe = r.id === myUserId;
+      const pos = medals[i] || (i+1);
+      const pClass = posClass[i] || "";
+      const pct = r.played > 0 ? Math.round(r.wins/r.played*100) : 0;
+      return `<tr class="${isMe?"me":""}">
+        <td><span class="rank-pos ${pClass}">${pos}</span></td>
+        <td><span class="rank-name">${r.username}${isMe?" (tú)":""}</span></td>
+        <td><span class="rank-streak">x${r.best_streak}</span></td>
+        <td><span class="rank-wins">${r.wins}/${r.played} (${pct}%)</span></td>
+      </tr>`;
+    }).join("")}</tbody>
+  </table>`;
+}
+
+function renderUsernameSection() {
+  const el = document.getElementById("ranking-username-section");
+  if (myUsername) {
+    el.innerHTML = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:.75rem;padding:.6rem .875rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-sm)">
+      <span style="font-size:13px;color:var(--text-muted)">Jugando como</span>
+      <span style="font-size:13px;font-weight:700;color:var(--accent);flex:1">${myUsername}</span>
+      <button class="ranking-btn" id="change-name-btn" style="font-size:11px;padding:.3rem .6rem">Cambiar</button>
+    </div>`;
+    document.getElementById("change-name-btn").addEventListener("click", () => {
+      myUsername = ""; myUserId = "";
+      localStorage.removeItem(USERNAME_KEY); localStorage.removeItem(USER_ID_KEY);
+      renderUsernameSection();
+    });
+  } else {
+    el.innerHTML = `<div style="margin-bottom:.75rem">
+      <div style="font-size:13px;color:var(--text-muted);margin-bottom:.25rem">Elige un nombre para aparecer en el ranking:</div>
+      <div style="display:flex;gap:8px">
+        <input class="username-input" id="username-input" placeholder="Tu nombre o apodo..." maxlength="20" style="margin:0;flex:1">
+        <button class="ranking-btn primary" id="save-username-btn">Guardar</button>
+      </div>
+    </div>`;
+    document.getElementById("save-username-btn").addEventListener("click", async () => {
+      const val = document.getElementById("username-input").value.trim();
+      if (!val) return;
+      myUsername = val;
+      localStorage.setItem(USERNAME_KEY, myUsername);
+      renderUsernameSection();
+      await upsertRanking();
+      const rows = await fetchRanking();
+      renderRankingList(rows);
+    });
+  }
+}
+
+async function openRanking() {
+  openModal("ranking-modal");
+  renderUsernameSection();
+  document.getElementById("ranking-list").innerHTML = '<div class="ranking-empty">Cargando...</div>';
+  try {
+    const rows = await fetchRanking();
+    renderRankingList(rows);
+  } catch(e) {
+    document.getElementById("ranking-list").innerHTML = '<div class="ranking-empty">Error cargando el ranking 😔</div>';
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
