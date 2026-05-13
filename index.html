@@ -286,10 +286,8 @@
 <div class="modal-overlay hidden ranking-modal" id="ranking-modal">
   <div class="modal">
     <button class="modal-close" id="ranking-close">✕</button>
-    <div class="ranking-title-row">
-      <div class="modal-title" style="margin-bottom:0">🏆 Ranking Global</div>
-      <button class="ranking-btn" id="ranking-refresh-btn">↻ Actualizar</button>
-    </div>
+    <div class="modal-title">🏆 Ranking Global</div>
+    <button class="ranking-btn" id="ranking-refresh-btn" style="margin-bottom:.75rem;width:100%">↻ Actualizar ranking</button>
     <div id="ranking-username-section"></div>
     <div id="ranking-list"><div class="ranking-empty">Cargando ranking...</div></div>
   </div>
@@ -663,33 +661,67 @@ function renderRankingList(rows) {
   </table>`;
 }
 
-function renderUsernameSection() {
+function renderUsernameSection(isChanging=false) {
   const el = document.getElementById("ranking-username-section");
-  if (myUsername) {
+  if (myUsername && !isChanging) {
     el.innerHTML = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:.75rem;padding:.6rem .875rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-sm)">
       <span style="font-size:13px;color:var(--text-muted)">Jugando como</span>
       <span style="font-size:13px;font-weight:700;color:var(--accent);flex:1">${myUsername}</span>
       <button class="ranking-btn" id="change-name-btn" style="font-size:11px;padding:.3rem .6rem">Cambiar</button>
     </div>`;
     document.getElementById("change-name-btn").addEventListener("click", () => {
-      myUsername = ""; myUserId = "";
-      localStorage.removeItem(USERNAME_KEY); localStorage.removeItem(USER_ID_KEY);
-      renderUsernameSection();
+      renderUsernameSection(true);
     });
   } else {
+    const showCancel = !!myUsername; // show cancel only if already had a name
     el.innerHTML = `<div style="margin-bottom:.75rem">
-      <div style="font-size:13px;color:var(--text-muted);margin-bottom:.25rem">Elige un nombre para aparecer en el ranking:</div>
+      <div style="font-size:13px;color:var(--text-muted);margin-bottom:.5rem">${showCancel?"Cambia tu nombre:":"Elige un nombre para aparecer en el ranking:"}</div>
+      <input class="username-input" id="username-input" placeholder="Tu nombre o apodo..." maxlength="20" value="${showCancel?myUsername:""}">
       <div style="display:flex;gap:8px">
-        <input class="username-input" id="username-input" placeholder="Tu nombre o apodo..." maxlength="20" style="margin:0;flex:1">
-        <button class="ranking-btn primary" id="save-username-btn">Guardar</button>
+        <button class="ranking-btn primary" id="save-username-btn" style="flex:1">Guardar</button>
+        ${showCancel?'<button class="ranking-btn" id="cancel-name-btn">Cancelar</button>':""}
       </div>
     </div>`;
+    if(showCancel){
+      document.getElementById("cancel-name-btn").addEventListener("click", () => {
+        renderUsernameSection(false);
+      });
+    }
     document.getElementById("save-username-btn").addEventListener("click", async () => {
       const val = document.getElementById("username-input").value.trim();
       if (!val) return;
+      const saveBtn = document.getElementById("save-username-btn");
+      saveBtn.textContent = "Comprobando...";
+      saveBtn.disabled = true;
+
+      // Check if name already taken by someone else
+      try {
+        const existing = await sbFetch(`/rest/v1/ranking?username=eq.${encodeURIComponent(val)}&select=id`);
+        const takenByOther = existing && existing.length > 0 && existing.some(r => r.id !== myUserId);
+        if (takenByOther) {
+          saveBtn.textContent = "Guardar";
+          saveBtn.disabled = false;
+          const input = document.getElementById("username-input");
+          input.style.borderColor = "var(--red)";
+          input.placeholder = "Ese nombre ya está en uso 😅";
+          input.value = "";
+          setTimeout(() => { input.style.borderColor = ""; }, 2000);
+          return;
+        }
+      } catch(e) {}
+
+      // Delete old entry if exists
+      if (myUserId) {
+        try {
+          await sbFetch(`/rest/v1/ranking?id=eq.${myUserId}`, { method: "DELETE" });
+        } catch(e) {}
+        myUserId = "";
+        localStorage.removeItem(USER_ID_KEY);
+      }
       myUsername = val;
       localStorage.setItem(USERNAME_KEY, myUsername);
-      renderUsernameSection();
+      renderUsernameSection(false);
+      document.getElementById("ranking-list").innerHTML='<div class="ranking-empty">Guardando...</div>';
       await upsertRanking();
       const rows = await fetchRanking();
       renderRankingList(rows);
