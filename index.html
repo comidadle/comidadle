@@ -414,234 +414,506 @@ try{const s=JSON.parse(localStorage.getItem(STREAK_KEY));if(s)streakData={...str
 function saveStreak(){try{localStorage.setItem(STREAK_KEY,JSON.stringify(streakData))}catch(e){}}
 
 // ═══════════════════════════════════════════════════════════
-// MODO DUELO
+// MODO DUELO — MULTIJUGADOR REAL CON SUPABASE
 // ═══════════════════════════════════════════════════════════
 const DUEL_KEY = "comidadle_duel_";
+const DUEL_PLAYER_KEY = "comidadle_duel_player";
 
-function getDuelDish(seed) {
+function getDuelDishBySeed(seed) {
   const rng = seededRng(seed);
   const idx = Math.floor(rng() * ALL_DISHES.length);
   return ALL_DISHES[idx];
 }
 
-function encodeDuel(dishName, seed) {
-  return btoa(encodeURIComponent(JSON.stringify({d:dishName, s:seed})));
+function genDuelId() {
+  return Math.random().toString(36).slice(2,10).toUpperCase();
 }
 
-function decodeDuel(str) {
-  try { return JSON.parse(decodeURIComponent(atob(str))); } catch(e) { return null; }
+function encodeDuelId(id) {
+  return btoa(id);
 }
 
-function createDuelLink() {
-  const seed = Math.floor(Math.random() * 999999);
-  const duelDish = getDuelDish(seed);
-  const code = encodeDuel(duelDish.name, seed);
-  const base = window.location.href.split("?")[0];
-  return { link: `${base}?duel=${code}`, dish: duelDish, seed, code };
+function decodeDuelId(str) {
+  try { return atob(str); } catch(e) { return null; }
 }
 
+// ── Supabase helpers for duels ──
+async function getDuel(id) {
+  const res = await sbFetch(`/rest/v1/duels?id=eq.${id}&select=*`);
+  return res && res[0] ? res[0] : null;
+}
+
+async function createDuel(id, seeds) {
+  return await sbFetch("/rest/v1/duels", {
+    method: "POST",
+    headers: {...SB_HEADERS, "Prefer":"return=representation"},
+    body: JSON.stringify({ id, dish_seeds: JSON.stringify(seeds), status: "waiting" })
+  });
+}
+
+async function patchDuel(id, data) {
+  return await sbFetch(`/rest/v1/duels?id=eq.${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(data)
+  });
+}
+
+// ── Generate seeds for N rounds (all different dishes) ──
+function genSeeds(n, exclude) {
+  const seeds = [];
+  const used = new Set(exclude ? [exclude] : []);
+  while (seeds.length < n) {
+    const s = Math.floor(Math.random() * 999999);
+    const d = getDuelDishBySeed(s);
+    if (!used.has(d.name)) { used.add(d.name); seeds.push(s); }
+  }
+  return seeds;
+}
+
+// ── Poll helper ──
+function pollDuel(id, onUpdate, stopCondition, intervalMs = 2000) {
+  let stopped = false;
+  const interval = setInterval(async () => {
+    if (stopped) return;
+    const duel = await getDuel(id).catch(() => null);
+    if (!duel) return;
+    onUpdate(duel);
+    if (stopCondition(duel)) { stopped = true; clearInterval(interval); }
+  }, intervalMs);
+  return () => { stopped = true; clearInterval(interval); };
+}
+
+// ════════════════════════════════════════════════════════════
+// SCREENS
+// ════════════════════════════════════════════════════════════
+
+function openDuel() {
+  openModal("duel-modal");
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get("duel");
+  if (code) {
+    const id = decodeDuelId(code);
+    if (id) { renderDuelJoinScreen(id, code); return; }
+  }
+  renderDuelCreate();
+}
+
+// ── 1. CREATE ──
 function renderDuelCreate() {
   const el = document.getElementById("duel-content");
   el.innerHTML = `
     <div style="text-align:center;margin-bottom:1rem">
       <div style="font-size:40px;margin-bottom:.5rem">⚔️</div>
       <div style="font-family:'Fraunces',serif;font-size:18px;font-weight:900;color:var(--text);margin-bottom:.5rem">Modo Duelo</div>
-      <div style="font-size:13px;color:var(--text-muted);line-height:1.65">Reta a un amigo al mismo plato aleatorio. Nadie ve el plato hasta que los dos confirman que están listos. Gana quien acierte primero.</div>
+      <div style="font-size:13px;color:var(--text-muted);line-height:1.65">Reta a un amigo al mismo plato. Nadie ve el plato hasta que los dos confirman. Eliges cuántas rondas. Gana quien acumule más puntos.</div>
     </div>
     <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-sm);padding:.875rem;margin-bottom:1rem">
       <div style="font-size:12px;font-weight:700;color:var(--gold);margin-bottom:.5rem">📋 Cómo funciona</div>
       <div style="font-size:12px;color:var(--text-muted);line-height:1.7">
-        1️⃣ Crea el duelo y copia el link<br>
-        2️⃣ Mándaselo a tu rival<br>
-        3️⃣ Los dos confirman que están listos<br>
-        4️⃣ ¡El plato se revela y empieza el duelo!
+        1️⃣ Crea el duelo y manda el link a tu rival<br>
+        2️⃣ Votan las rondas (3 o 5)<br>
+        3️⃣ Los dos dan Empezar — cuenta atrás de 5s<br>
+        4️⃣ ¡A adivinar! Gana quien acierte primero cada ronda<br>
+        5️⃣ Al final del duelo se decide el ganador
       </div>
     </div>
     <button class="play-btn" id="create-duel-btn">⚔️ Crear duelo</button>`;
-  document.getElementById("create-duel-btn").addEventListener("click", () => {
-    const { link, code } = createDuelLink();
-    renderDuelWaiting(code, link, true);
+
+  document.getElementById("create-duel-btn").addEventListener("click", async () => {
+    const btn = document.getElementById("create-duel-btn");
+    btn.textContent = "Creando..."; btn.disabled = true;
+    const id = genDuelId();
+    const code = encodeDuelId(id);
+    const seeds = genSeeds(5, dish.name); // pre-generate 5 seeds (max rounds)
+    await createDuel(id, seeds);
+    localStorage.setItem(DUEL_PLAYER_KEY + "_" + id, "p1");
+    const link = `${window.location.href.split("?")[0]}?duel=${code}`;
+    renderDuelShareScreen(id, code, link, seeds);
   });
 }
 
-function renderDuelWaiting(code, link, isCreator) {
+// ── 2. SHARE LINK (p1 only) ──
+function renderDuelShareScreen(id, code, link, seeds) {
   const el = document.getElementById("duel-content");
-  const decoded = decodeDuel(code);
-  const duelDish = ALL_DISHES.find(d => d.name === decoded.d);
-
-  // Save that I'm ready
-  const myKey = DUEL_KEY + code + (isCreator ? "_p1" : "_p2");
-  localStorage.setItem(myKey, "ready");
-
   el.innerHTML = `
-    <div class="duel-badge">⚔️ DUELO CREADO</div>
+    <div class="duel-badge">⚔️ DUELO CREADO — Esperando rival</div>
     <div style="font-size:13px;color:var(--text-muted);margin-bottom:.5rem">Manda este link a tu rival:</div>
     <div class="duel-share-box">${link}</div>
-    <button class="ranking-btn primary" id="copy-duel-link" style="width:100%;justify-content:center;margin-bottom:1rem">📋 Copiar link del duelo</button>
-    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-sm);padding:.875rem;text-align:center;margin-bottom:1rem">
-      <div style="font-size:22px;margin-bottom:.25rem">⏳</div>
-      <div style="font-size:13px;font-weight:600;color:var(--text)">Esperando a tu rival...</div>
-      <div style="font-size:12px;color:var(--text-muted);margin-top:.25rem">Cuando abra el link y confirme, podrás empezar</div>
-    </div>
-    <button class="play-btn" id="ready-btn">✅ ¡Estoy listo! Empezar mi turno</button>`;
+    <button class="ranking-btn primary" id="copy-duel-link" style="width:100%;justify-content:center;margin-bottom:1rem">📋 Copiar link</button>
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-sm);padding:1rem;text-align:center;margin-bottom:1rem">
+      <div style="font-size:22px;margin-bottom:.25rem" id="waiting-icon">⏳</div>
+      <div style="font-size:13px;font-weight:600;color:var(--text)" id="waiting-text">Esperando a tu rival...</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:.25rem">Cuando entre al link, pasaréis a votar las rondas</div>
+    </div>`;
 
   document.getElementById("copy-duel-link").addEventListener("click", () => {
     navigator.clipboard.writeText(link).then(() => {
       document.getElementById("copy-duel-link").textContent = "¡Copiado! ✓";
     }).catch(()=>{});
   });
-  document.getElementById("ready-btn").addEventListener("click", () => {
-    renderDuelPlay(duelDish, code, isCreator, link);
-  });
+
+  // Poll until p2 joins
+  const stopPoll = pollDuel(id, (duel) => {
+    if (duel.p2_ready || duel.status === "voting") {
+      stopPoll();
+      renderDuelVoteRounds(id, code, link, "p1", JSON.parse(duel.dish_seeds || "[]"));
+    }
+  }, (duel) => duel.status === "voting" || duel.p2_ready);
 }
 
-function renderDuelPlay(duelDish, code, isCreator, shareLink) {
+// ── 3. JOIN (p2) ──
+async function renderDuelJoinScreen(id, code) {
   const el = document.getElementById("duel-content");
-  const MAX = 6;
-  const opts = shuffleWithSeed([duelDish.country, ...duelDish.dist], code.length * 31337);
-  let dLog = [], dWrong = new Set(), dDone = false;
+  el.innerHTML = `<div style="text-align:center;padding:2rem;color:var(--text-muted);font-size:13px">Conectando al duelo...</div>`;
 
-  const savedDuel = JSON.parse(localStorage.getItem(DUEL_KEY + code) || "{}");
-  if (savedDuel.done) {
-    renderDuelFinished(duelDish, code, savedDuel, isCreator, shareLink);
+  const duel = await getDuel(id).catch(() => null);
+  if (!duel) {
+    el.innerHTML = `<div style="text-align:center;padding:2rem;color:var(--red);font-size:13px">❌ Duelo no encontrado</div>`;
     return;
   }
 
-  function renderDuel() {
-    const maskedName = dDone ? duelDish.name : duelDish.name.replace(buildBlurRegex(duelDish.country), m => `<span style="filter:blur(5px);user-select:none">${m}</span>`);
-    const dotsHTML = Array.from({length:MAX},(_,i) => `<div class="dot${i<dLog.length?(dLog[i]?" correct":" wrong"):""}"></div>`).join("");
-    const hintsHTML = Array.from({length:Math.min(dLog.length+1,duelDish.hints.length)},(_,i) => `<div class="hint"><strong>Pista ${i+1}</strong> — ${duelDish.hints[i]}</div>`).join("");
-    const gridHTML = opts.map(c => {
-      const disabled = dDone || dWrong.has(c) ? "disabled" : "";
-      const correct = dDone && c === duelDish.country ? " correct-answer" : "";
-      return `<button class="country-btn${correct}" ${disabled} data-c="${c}"><span>${getFlag(c)}</span><span>${c}</span></button>`;
-    }).join("");
+  localStorage.setItem(DUEL_PLAYER_KEY + "_" + id, "p2");
+  await patchDuel(id, { p2_ready: true, status: "voting" });
 
-    el.innerHTML = `
-      <div class="duel-badge">⚔️ DUELO${isCreator?" · Tú creaste este duelo":""}</div>
-      ${isCreator && shareLink ? `
-        <div style="font-size:12px;color:var(--text-muted);margin-bottom:.25rem">Manda este link a tu rival:</div>
-        <div class="duel-share-box" id="duel-link-box">${shareLink}</div>
-        <button class="ranking-btn" id="copy-duel-link" style="width:100%;margin-bottom:.75rem;justify-content:center">📋 Copiar link del duelo</button>
-      ` : ""}
-      <div class="dish-card" style="margin-bottom:.75rem">
-        <span class="dish-emoji">${duelDish.emoji}</span>
-        <div class="dish-name">${maskedName}</div>
-        <div class="dish-desc">${duelDish.desc}</div>
-      </div>
-      <div class="dots" style="margin-bottom:.75rem">${dotsHTML}</div>
-      ${hintsHTML ? `<div class="hints" style="margin-bottom:.75rem">${hintsHTML}</div>` : ""}
-      <div class="country-grid">${gridHTML}</div>`;
+  const seeds = JSON.parse(duel.dish_seeds || "[]");
+  const link = `${window.location.href.split("?")[0]}?duel=${code}`;
 
-    if (isCreator && shareLink) {
-      document.getElementById("copy-duel-link").addEventListener("click", () => {
-        navigator.clipboard.writeText(shareLink).then(() => {
-          document.getElementById("copy-duel-link").textContent = "¡Copiado! ✓";
-        }).catch(() => {});
-      });
-    }
-
-    el.querySelectorAll(".country-btn:not([disabled])").forEach(btn => {
-      btn.addEventListener("click", () => {
-        const c = btn.dataset.c;
-        if (c === duelDish.country) {
-          playCorrect(); dLog.push(true); dDone = true;
-          const result = { done: true, won: true, attempts: dLog.length, started: true };
-          localStorage.setItem(DUEL_KEY + code, JSON.stringify(result));
-          renderDuel();
-          setTimeout(() => { launchConfetti(); playWin(); }, 300);
-          setTimeout(() => renderDuelFinished(duelDish, code, result, isCreator, shareLink), 1200);
-        } else {
-          playWrong(); dLog.push(false); dWrong.add(c);
-          if (dLog.length >= MAX) {
-            const result = { done: true, won: false, attempts: dLog.length, started: true };
-            localStorage.setItem(DUEL_KEY + code, JSON.stringify(result));
-            dDone = true; renderDuel();
-            setTimeout(() => { playLose(); renderDuelFinished(duelDish, code, result, isCreator, shareLink); }, 800);
-          } else renderDuel();
-        }
-      });
-    });
-  }
-  renderDuel();
-}
-
-function renderDuelFinished(duelDish, code, result, isCreator, shareLink) {
-  const el = document.getElementById("duel-content");
-  const rivalKey = DUEL_KEY + code + "_rival";
-  const rivalResult = JSON.parse(localStorage.getItem(rivalKey) || "null");
-
-  let rivalHTML = "";
-  if (rivalResult) {
-    const iWon = result.won && (!rivalResult.won || result.attempts <= rivalResult.attempts);
-    rivalHTML = `<div class="duel-result-box">
-      ${iWon
-        ? `<div class="duel-winner">🏆 ¡Ganaste el duelo!</div>`
-        : `<div class="duel-loser">😔 Tu rival ganó esta vez</div>`}
-      <div style="font-size:13px;color:var(--text-muted);margin-top:.25rem">
-        Tú: ${result.won ? `✅ ${result.attempts} intento${result.attempts!==1?"s":""}` : "❌ No acertaste"} · 
-        Rival: ${rivalResult.won ? `✅ ${rivalResult.attempts} intento${rivalResult.attempts!==1?"s":""}` : "❌ No acertó"}
-      </div>
-    </div>`;
-  } else {
-    rivalHTML = `<div class="duel-result-box">
-      <div style="font-size:22px;margin-bottom:.5rem">⏳</div>
-      <div style="font-size:14px;font-weight:600;color:var(--text)">Esperando a tu rival...</div>
-      <div style="font-size:12px;color:var(--text-muted);margin-top:.25rem">Manda el link para que juegue</div>
-      ${shareLink ? `<div class="duel-share-box" style="margin-top:.75rem">${shareLink}</div>
-      <button class="ranking-btn primary" id="copy-duel-link2" style="width:100%;justify-content:center;margin-top:.5rem">📋 Copiar link</button>` : ""}
-    </div>`;
-  }
-
-  el.innerHTML = `
-    <div class="duel-badge">⚔️ DUELO TERMINADO</div>
-    <div style="text-align:center;margin-bottom:.75rem">
-      <div style="font-size:36px">${duelDish.emoji}</div>
-      <div style="font-size:14px;font-weight:600;color:var(--text);margin-top:.25rem">${duelDish.name}</div>
-      <div style="font-size:12px;color:var(--text-muted)">${duelDish.flag} ${duelDish.country}</div>
-      <div style="font-size:13px;margin-top:.5rem;color:${result.won?"var(--green)":"var(--red)"}">
-        ${result.won ? `✅ Acertaste en ${result.attempts} intento${result.attempts!==1?"s":""}` : "❌ No acertaste"}
-      </div>
-    </div>
-    ${rivalHTML}
-    <button class="ranking-btn primary" style="width:100%;justify-content:center;margin-top:.75rem" id="new-duel-btn">⚔️ ¡Revancha! Nuevo duelo</button>`;
-
-  const copyBtn2 = document.getElementById("copy-duel-link2");
-  if (copyBtn2 && shareLink) {
-    copyBtn2.addEventListener("click", () => {
-      navigator.clipboard.writeText(shareLink).then(() => { copyBtn2.textContent = "¡Copiado! ✓"; }).catch(()=>{});
-    });
-  }
-  document.getElementById("new-duel-btn").addEventListener("click", () => {
-    // Create a new duel with a different dish
-    const { link, code } = createDuelLink();
-    renderDuelWaiting(code, link, true);
-  });
-}
-
-function renderDuelRivalWelcome(code) {
-  const el = document.getElementById("duel-content");
-  const decoded = decodeDuel(code);
-  const duelDish = ALL_DISHES.find(d => d.name === decoded.d);
   el.innerHTML = `
     <div style="text-align:center;margin-bottom:1rem">
       <div style="font-size:40px;margin-bottom:.5rem">⚔️</div>
       <div style="font-family:'Fraunces',serif;font-size:18px;font-weight:900;color:var(--text);margin-bottom:.5rem">¡Te han retado!</div>
-      <div style="font-size:13px;color:var(--text-muted);line-height:1.65">Alguien te ha mandado un duelo de Comidadle. Adivina el país de origen del plato antes que tu rival.</div>
+      <div style="font-size:13px;color:var(--text-muted);line-height:1.65">Adivina el país de origen de cada plato antes que tu rival. Gana quien acumule más puntos al final.</div>
     </div>
     <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-sm);padding:.875rem;margin-bottom:1rem">
       <div style="font-size:12px;font-weight:700;color:var(--gold);margin-bottom:.5rem">📋 Reglas</div>
       <div style="font-size:12px;color:var(--text-muted);line-height:1.7">
-        🌶️ Tienes 6 intentos para adivinar el país<br>
-        💡 Con cada fallo aparece una pista nueva<br>
-        🏆 Gana quien acierte el país primero<br>
-        ⚔️ Si los dos aciertan, gana quien usó menos intentos
+        🌶️ 6 intentos por ronda para adivinar el país<br>
+        💡 Pistas progresivas con cada fallo<br>
+        🏆 Punto para quien acierte primero<br>
+        ⚔️ Gana quien tenga más puntos al final
       </div>
     </div>
-    <button class="play-btn" id="rival-ready-btn">✅ ¡Entendido! Empezar</button>`;
+    <button class="play-btn" id="join-ready-btn">✅ ¡Entendido! Continuar</button>`;
 
-  document.getElementById("rival-ready-btn").addEventListener("click", () => {
-    renderDuelPlay(duelDish, code, false, null);
+  document.getElementById("join-ready-btn").addEventListener("click", () => {
+    renderDuelVoteRounds(id, code, link, "p2", seeds);
+  });
+}
+
+// ── 4. VOTE ROUNDS ──
+function renderDuelVoteRounds(id, code, link, player, seeds) {
+  const el = document.getElementById("duel-content");
+  let myVote = null;
+  let stopPoll = null;
+
+  function render(myV, rivalV) {
+    el.innerHTML = `
+      <div class="duel-badge">⚔️ DUELO — Elegir rondas</div>
+      <div style="font-size:13px;color:var(--text-muted);margin-bottom:1rem">¿Cuántas rondas queréis jugar? Los dos tenéis que votar lo mismo.</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:1rem">
+        ${[3,5].map(n => `
+          <button class="country-btn${myV===n?" correct-answer":""}" id="vote-${n}" style="${myV?'pointer-events:none':''}">
+            <span style="font-size:20px">${n===3?"🥊":"🏆"}</span>
+            <span>
+              <span style="font-weight:700;font-size:15px">${n} rondas</span><br>
+              <span style="font-size:11px;color:var(--text-muted)">${n===3?"Rápido":"Épico"}</span>
+            </span>
+          </button>`).join("")}
+      </div>
+      <div style="text-align:center;font-size:12px;color:var(--text-muted);padding:.5rem;background:var(--surface2);border-radius:var(--r-sm)">
+        ${myV ? `✅ Tú votaste ${myV} rondas` : "Elige cuántas rondas"} · 
+        ${rivalV ? `✅ Rival votó ${rivalV} rondas` : "⏳ Rival votando..."}
+      </div>
+      ${myV && rivalV && myV !== rivalV ? `<div style="font-size:12px;color:var(--gold);text-align:center;margin-top:.5rem">⚠️ No coincidís — volved a votar</div>` : ""}`;
+
+    [3,5].forEach(n => {
+      const btn = document.getElementById(`vote-${n}`);
+      if (btn && !myV) btn.addEventListener("click", async () => {
+        myVote = n;
+        const patch = player === "p1" ? { p1_rounds_vote: n } : { p2_rounds_vote: n };
+        await patchDuel(id, patch);
+        const duel = await getDuel(id);
+        const rv = player === "p1" ? duel.p2_rounds_vote : duel.p1_rounds_vote;
+        render(n, rv);
+      });
+    });
+  }
+
+  render(null, null);
+
+  stopPoll = pollDuel(id, async (duel) => {
+    const myV = player === "p1" ? duel.p1_rounds_vote : duel.p2_rounds_vote;
+    const rv  = player === "p1" ? duel.p2_rounds_vote : duel.p1_rounds_vote;
+    myVote = myV;
+    render(myV, rv);
+
+    if (myV && rv && myV === rv) {
+      stopPoll();
+      // p1 writes the final config
+      if (player === "p1") {
+        await patchDuel(id, { rounds_total: myV, status: "ready", current_round: 1 });
+      }
+      renderDuelReadyScreen(id, player, seeds, myV);
+    } else if (myV && rv && myV !== rv) {
+      // reset votes
+      await patchDuel(id, { p1_rounds_vote: null, p2_rounds_vote: null });
+      myVote = null;
+      render(null, null);
+    }
+  }, () => false);
+}
+
+// ── 5. BOTH READY / COUNTDOWN ──
+function renderDuelReadyScreen(id, player, seeds, totalRounds) {
+  const el = document.getElementById("duel-content");
+  let myReady = false;
+  let stopPoll = null;
+
+  function render(myR, rivalR, countdown) {
+    el.innerHTML = `
+      <div class="duel-badge">⚔️ RONDA 1 DE ${totalRounds} — ¿Listos?</div>
+      <div style="text-align:center;padding:1.25rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--r);margin-bottom:1rem">
+        ${countdown !== null
+          ? `<div style="font-family:'Fraunces',serif;font-size:52px;font-weight:900;color:var(--accent)">${countdown}</div>
+             <div style="font-size:13px;color:var(--text-muted)">¡El plato se revela ya!</div>`
+          : `<div style="font-size:22px;margin-bottom:.5rem">${myR && rivalR ? "🔥" : "⏳"}</div>
+             <div style="font-size:13px;font-weight:600;color:var(--text)">${myR && rivalR ? "¡Los dos listos! Empezando..." : "Esperando..."}</div>`}
+      </div>
+      <div style="display:flex;gap:8px;justify-content:center;margin-bottom:1rem;font-size:13px">
+        <span style="padding:.35rem .875rem;border-radius:99px;background:${myR?"var(--green-bg)":"var(--surface2)"};border:1px solid ${myR?"var(--green)":"var(--border)"};color:${myR?"var(--green)":"var(--text-muted)"}">
+          ${myR?"✅ Tú listo":"👤 Tú"}
+        </span>
+        <span style="padding:.35rem .875rem;border-radius:99px;background:${rivalR?"var(--green-bg)":"var(--surface2)"};border:1px solid ${rivalR?"var(--green)":"var(--border)"};color:${rivalR?"var(--green)":"var(--text-muted)"}">
+          ${rivalR?"✅ Rival listo":"⏳ Rival"}
+        </span>
+      </div>
+      ${!myR ? `<button class="play-btn" id="im-ready-btn">✅ ¡Empezar!</button>` : ""}`;
+
+    if (!myR) {
+      document.getElementById("im-ready-btn")?.addEventListener("click", async () => {
+        myReady = true;
+        const patch = player === "p1" ? { p1_ready: true } : { p2_ready: false, status: "ready" };
+        // Use a separate field for round-start ready state
+        const readyPatch = player === "p1" ? { p1_rounds_vote: -1 } : { p2_rounds_vote: -1 };
+        await patchDuel(id, readyPatch);
+        render(true, rivalR, null);
+      });
+    }
+  }
+
+  render(false, false, null);
+
+  stopPoll = pollDuel(id, async (duel) => {
+    const myR    = (player === "p1" ? duel.p1_rounds_vote : duel.p2_rounds_vote) === -1;
+    const rivalR = (player === "p1" ? duel.p2_rounds_vote : duel.p1_rounds_vote) === -1;
+    render(myR, rivalR, null);
+
+    if (myR && rivalR) {
+      stopPoll();
+      // Countdown
+      let count = 5;
+      render(true, true, count);
+      const timer = setInterval(() => {
+        count--;
+        if (count <= 0) {
+          clearInterval(timer);
+          renderDuelRound(id, player, seeds, 1, totalRounds, []);
+        } else {
+          render(true, true, count);
+        }
+      }, 1000);
+    }
+  }, () => false);
+}
+
+// ── 6. PLAY ROUND ──
+function renderDuelRound(id, player, seeds, roundNum, totalRounds, scores) {
+  const el = document.getElementById("duel-content");
+  const seed = seeds[roundNum - 1];
+  const roundDish = getDuelDishBySeed(seed);
+  const MAX = 6;
+  const opts = shuffleWithSeed([roundDish.country, ...roundDish.dist], seed * 31337);
+  let rLog = [], rWrong = new Set(), rDone = false;
+  let stopPoll = null;
+
+  function render() {
+    const maskedName = rDone ? roundDish.name : roundDish.name.replace(buildBlurRegex(roundDish.country), m => `<span style="filter:blur(5px);user-select:none">${m}</span>`);
+    const dotsHTML = Array.from({length:MAX},(_,i)=>`<div class="dot${i<rLog.length?(rLog[i]?" correct":" wrong"):""}"></div>`).join("");
+    const nHints = rDone ? roundDish.hints.length : Math.min(rLog.length+1, roundDish.hints.length);
+    const hintsHTML = Array.from({length:nHints},(_,i)=>`<div class="hint"><strong>Pista ${i+1}</strong> — ${roundDish.hints[i]}</div>`).join("");
+    const gridHTML = opts.map(c=>{
+      const dis = rDone||rWrong.has(c)?"disabled":"";
+      const ca = rDone&&c===roundDish.country?" correct-answer":"";
+      return `<button class="country-btn${ca}" ${dis} data-c="${c}"><span>${getFlag(c)}</span><span>${c}</span></button>`;
+    }).join("");
+
+    // Score display
+    const myScore   = scores.filter(s=>s===player).length;
+    const rivalScore= scores.filter(s=>s!==""&&s!==player).length;
+    const draws     = scores.filter(s=>s==="draw").length;
+
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem">
+        <div class="duel-badge" style="margin-bottom:0">Ronda ${roundNum}/${totalRounds}</div>
+        <div style="font-size:12px;color:var(--text-muted)">Tú <span style="color:var(--green);font-weight:700">${myScore}</span> · <span style="color:var(--red);font-weight:700">${rivalScore}</span> Rival${draws?" · 🤝"+draws:""}</div>
+      </div>
+      <div class="dish-card" style="margin-bottom:.75rem">
+        <span class="dish-emoji">${roundDish.emoji}</span>
+        <div class="dish-name">${maskedName}</div>
+        <div class="dish-desc">${roundDish.desc}</div>
+      </div>
+      <div class="dots" style="margin-bottom:.75rem">${dotsHTML}</div>
+      ${hintsHTML?`<div class="hints" style="margin-bottom:.75rem">${hintsHTML}</div>`:""}
+      <div class="country-grid">${gridHTML}</div>
+      ${rDone?`<div style="text-align:center;font-size:13px;color:var(--text-muted);margin-top:.75rem;padding:.75rem;background:var(--surface2);border-radius:var(--r-sm)">⏳ Esperando a tu rival...</div>`:""}`;
+
+    el.querySelectorAll(".country-btn:not([disabled])").forEach(btn=>{
+      btn.addEventListener("click", async ()=>{
+        const c = btn.dataset.c;
+        if(c===roundDish.country){
+          playCorrect(); rLog.push(true); rDone=true; render();
+          setTimeout(()=>{launchConfetti();playWin();},300);
+          // Report win
+          const col = player==="p1"?"p1_scores":"p2_scores";
+          const current = await getDuel(id);
+          const arr = JSON.parse(current[col]||"[]");
+          arr.push({round:roundNum,won:true,attempts:rLog.length});
+          await patchDuel(id,{[col]:JSON.stringify(arr)});
+        } else {
+          playWrong(); rLog.push(false); rWrong.add(c);
+          if(rLog.length>=MAX){
+            rDone=true; render(); playLose();
+            const col=player==="p1"?"p1_scores":"p2_scores";
+            const current=await getDuel(id);
+            const arr=JSON.parse(current[col]||"[]");
+            arr.push({round:roundNum,won:false,attempts:MAX});
+            await patchDuel(id,{[col]:JSON.stringify(arr)});
+          } else render();
+        }
+      });
+    });
+  }
+
+  render();
+
+  // Poll for rival finishing this round
+  stopPoll = pollDuel(id, async (duel)=>{
+    const p1s = JSON.parse(duel.p1_scores||"[]");
+    const p2s = JSON.parse(duel.p2_scores||"[]");
+    const myScores    = player==="p1"?p1s:p2s;
+    const rivalScores = player==="p1"?p2s:p1s;
+    const myRound    = myScores.find(s=>s.round===roundNum);
+    const rivalRound = rivalScores.find(s=>s.round===roundNum);
+
+    if(myRound && rivalRound){
+      stopPoll();
+      // Determine round winner
+      let roundResult;
+      if(myRound.won && !rivalRound.won) roundResult=player;
+      else if(!myRound.won && rivalRound.won) roundResult=player==="p1"?"p2":"p1";
+      else if(myRound.won && rivalRound.won) roundResult=myRound.attempts<=rivalRound.attempts?player:(player==="p1"?"p2":"p1");
+      else roundResult="draw";
+
+      const newScores=[...scores, roundResult];
+      renderDuelRoundResult(id, player, seeds, roundNum, totalRounds, newScores, myRound, rivalRound, roundDish);
+    }
+  }, ()=>false);
+}
+
+// ── 7. ROUND RESULT ──
+function renderDuelRoundResult(id, player, seeds, roundNum, totalRounds, scores, myRound, rivalRound, roundDish) {
+  const el = document.getElementById("duel-content");
+  const lastResult = scores[scores.length-1];
+  const iWonRound = lastResult===player;
+  const isDraw    = lastResult==="draw";
+  const myTotal   = scores.filter(s=>s===player).length;
+  const rivalTotal= scores.filter(s=>s!==""&&s!==player&&s!=="draw").length;
+
+  el.innerHTML = `
+    <div style="text-align:center;margin-bottom:1rem">
+      <div style="font-size:36px;margin-bottom:.25rem">${isDraw?"🤝":iWonRound?"🏆":"😔"}</div>
+      <div style="font-family:'Fraunces',serif;font-size:18px;font-weight:900;color:${isDraw?"var(--gold)":iWonRound?"var(--green)":"var(--red)"}">
+        ${isDraw?"¡Empate en esta ronda!":iWonRound?"¡Ganaste esta ronda!":"Tu rival ganó esta ronda"}
+      </div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:.25rem">
+        ${roundDish.flag} ${roundDish.country} · 
+        Tú: ${myRound.won?"✅ "+myRound.attempts+" intento"+(myRound.attempts!==1?"s":""):"❌ no acertaste"} · 
+        Rival: ${rivalRound.won?"✅ "+rivalRound.attempts+" intento"+(rivalRound.attempts!==1?"s":""):"❌ no acertó"}
+      </div>
+    </div>
+    <div style="display:flex;justify-content:center;gap:1.5rem;padding:1rem;background:var(--surface2);border-radius:var(--r-sm);margin-bottom:1rem">
+      <div style="text-align:center">
+        <div style="font-family:'Fraunces',serif;font-size:32px;font-weight:900;color:var(--green)">${myTotal}</div>
+        <div style="font-size:11px;color:var(--text-muted)">Tú</div>
+      </div>
+      <div style="font-size:24px;color:var(--text-muted);display:flex;align-items:center">vs</div>
+      <div style="text-align:center">
+        <div style="font-family:'Fraunces',serif;font-size:32px;font-weight:900;color:var(--red)">${rivalTotal}</div>
+        <div style="font-size:11px;color:var(--text-muted)">Rival</div>
+      </div>
+    </div>
+    ${roundNum < totalRounds
+      ? `<button class="play-btn" id="next-round-btn">Siguiente ronda ${roundNum+1}/${totalRounds} ➜</button>`
+      : `<button class="play-btn" id="final-result-btn">Ver resultado final 🏆</button>`}`;
+
+  const nextBtn = document.getElementById("next-round-btn");
+  const finalBtn = document.getElementById("final-result-btn");
+
+  if(nextBtn) nextBtn.addEventListener("click", ()=>{
+    renderDuelRound(id, player, seeds, roundNum+1, totalRounds, scores);
+  });
+  if(finalBtn) finalBtn.addEventListener("click", ()=>{
+    renderDuelFinalResult(id, player, scores, totalRounds);
+  });
+}
+
+// ── 8. FINAL RESULT ──
+function renderDuelFinalResult(id, player, scores, totalRounds) {
+  const el = document.getElementById("duel-content");
+  const myTotal    = scores.filter(s=>s===player).length;
+  const rivalTotal = scores.filter(s=>s!==""&&s!==player&&s!=="draw").length;
+  const draws      = scores.filter(s=>s==="draw").length;
+  const iWon = myTotal > rivalTotal;
+  const isTie = myTotal === rivalTotal;
+
+  el.innerHTML = `
+    <div style="text-align:center;margin-bottom:1.25rem">
+      <div style="font-size:52px;margin-bottom:.5rem">${isTie?"🤝":iWon?"🏆":"😔"}</div>
+      <div style="font-family:'Fraunces',serif;font-size:22px;font-weight:900;color:${isTie?"var(--gold)":iWon?"var(--green)":"var(--red)"}">
+        ${isTie?"¡Empate total!":iWon?"¡Ganaste el duelo!":"Tu rival ganó el duelo"}
+      </div>
+    </div>
+    <div style="display:flex;justify-content:center;gap:2rem;padding:1.25rem;background:var(--surface2);border:1px solid var(--border-strong);border-radius:var(--r);margin-bottom:1rem">
+      <div style="text-align:center">
+        <div style="font-family:'Fraunces',serif;font-size:42px;font-weight:900;color:var(--green)">${myTotal}</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:.25rem">Tú</div>
+      </div>
+      <div style="display:flex;align-items:center;font-size:20px;color:var(--text-muted)">vs</div>
+      <div style="text-align:center">
+        <div style="font-family:'Fraunces',serif;font-size:42px;font-weight:900;color:var(--red)">${rivalTotal}</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:.25rem">Rival</div>
+      </div>
+    </div>
+    ${draws?`<div style="text-align:center;font-size:12px;color:var(--text-muted);margin-bottom:1rem">🤝 ${draws} ronda${draws!==1?"s":""} empatada${draws!==1?"s":""}</div>`:""}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <button class="ranking-btn primary" id="rematch-btn" style="justify-content:center">⚔️ Revancha</button>
+      <button class="ranking-btn" id="exit-duel-btn" style="justify-content:center">← Salir</button>
+    </div>`;
+
+  document.getElementById("rematch-btn").addEventListener("click", async ()=>{
+    // New duel, same players — go straight to vote rounds
+    const newId = genDuelId();
+    const newCode = encodeDuelId(newId);
+    const newSeeds = genSeeds(5, null);
+    await createDuel(newId, newSeeds);
+    await patchDuel(newId, { p1_ready: true, p2_ready: true, status: "voting" });
+    localStorage.setItem(DUEL_PLAYER_KEY+"_"+newId, player);
+    const newLink = `${window.location.href.split("?")[0]}?duel=${newCode}`;
+    renderDuelVoteRounds(newId, newCode, newLink, player, newSeeds);
+  });
+
+  document.getElementById("exit-duel-btn").addEventListener("click", ()=>{
+    closeModal("duel-modal");
   });
 }
 
@@ -649,19 +921,13 @@ function checkDuelFromURL() {
   const params = new URLSearchParams(window.location.search);
   const code = params.get("duel");
   if (!code) return false;
-  const decoded = decodeDuel(code);
-  if (!decoded) return false;
-  const duelDish = ALL_DISHES.find(d => d.name === decoded.d);
-  if (!duelDish) return false;
+  const id = decodeDuelId(code);
+  if (!id) return false;
   openModal("duel-modal");
-  renderDuelRivalWelcome(code);
+  renderDuelJoinScreen(id, code);
   return true;
 }
 
-function openDuel() {
-  openModal("duel-modal");
-  renderDuelCreate();
-}
 
 async function syncRanking(){try{await upsertRanking();}catch(e){}}
 function updateStreak(won){
