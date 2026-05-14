@@ -398,7 +398,8 @@ try{const s=JSON.parse(localStorage.getItem(CFG_KEY));if(s)cfg={...cfg,...s}}cat
 function saveCfg(){try{localStorage.setItem(CFG_KEY,JSON.stringify(cfg))}catch(e){}}
 function isHardActive(){return cfg.fewAttempts||cfg.moreCountries||cfg.noHints}
 function getMaxAttempts(){return cfg.fewAttempts?3:6}
-function getOpts(){return cfg.moreCountries?shuffleWithSeed(ALL_COUNTRIES,year*11+dayOfYear):shuffleWithSeed([dish.country,...dish.dist],year*11+dayOfYear)}
+const SESSION_SEED = (year * 73856 + dayOfYear * 5381) ^ 0xDEADBEEF;
+function getOpts(){return cfg.moreCountries?shuffleWithSeed(ALL_COUNTRIES,SESSION_SEED):shuffleWithSeed([dish.country,...dish.dist],SESSION_SEED)}
 
 const todayStr=now.toISOString().slice(0,10);
 const STATE_KEY="comidadle_"+todayStr;
@@ -732,7 +733,7 @@ function renderDuelRound(id, player, seeds, roundNum, totalRounds, scores) {
   const seed = seeds[roundNum - 1];
   const roundDish = getDuelDishBySeed(seed);
   const MAX = 6;
-  const opts = shuffleWithSeed([roundDish.country, ...roundDish.dist], seed * 31337);
+  const opts = shuffleWithSeed([roundDish.country, ...roundDish.dist], seed * 31337 ^ SESSION_SEED);
   let rLog = [], rWrong = new Set(), rDone = false;
   let stopPoll = null;
 
@@ -747,10 +748,11 @@ function renderDuelRound(id, player, seeds, roundNum, totalRounds, scores) {
       return `<button class="country-btn${ca}" ${dis} data-c="${c}"><span>${getFlag(c)}</span><span>${c}</span></button>`;
     }).join("");
 
-    // Score display
-    const myScore   = scores.filter(s=>s===player).length;
-    const rivalScore= scores.filter(s=>s!==""&&s!==player).length;
-    const draws     = scores.filter(s=>s==="draw").length;
+    // Score display from DB results
+    const results = scores.map ? scores : [];
+    const myScore   = results.filter(s=>s===player).length;
+    const rivalScore= results.filter(s=>s!==""&&s!==player&&s!=="draw").length;
+    const draws     = results.filter(s=>s==="draw").length;
 
     el.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem">
@@ -807,33 +809,68 @@ function renderDuelRound(id, player, seeds, roundNum, totalRounds, scores) {
 
     if(myRound && rivalRound){
       stopPoll();
-      // Determine round winner
-      let roundResult;
-      if(myRound.won && !rivalRound.won) roundResult=player;
-      else if(!myRound.won && rivalRound.won) roundResult=player==="p1"?"p2":"p1";
-      else if(myRound.won && rivalRound.won) roundResult=myRound.attempts<=rivalRound.attempts?player:(player==="p1"?"p2":"p1");
-      else roundResult="draw";
+      // Determine round winner — stored in DB by p1 to avoid discrepancy
+      const roundResults = JSON.parse(duel.dish_seeds||"[]"); // reuse field? No, use status field trick
+      // Both clients compute same result deterministically
+      let roundWinner;
+      if(myRound.won && !rivalRound.won) roundWinner = player;
+      else if(!myRound.won && rivalRound.won) roundWinner = player==="p1"?"p2":"p1";
+      else if(myRound.won && rivalRound.won){
+        // Same attempts = draw, else fewer wins
+        if(myRound.attempts === rivalRound.attempts) roundWinner = "draw";
+        else {
+          const p1Attempts = player==="p1"?myRound.attempts:rivalRound.attempts;
+          const p2Attempts = player==="p1"?rivalRound.attempts:myRound.attempts;
+          roundWinner = p1Attempts < p2Attempts ? "p1" : "p2";
+        }
+      } else roundWinner = "draw";
 
-      const newScores=[...scores, roundResult];
-      renderDuelRoundResult(id, player, seeds, roundNum, totalRounds, newScores, myRound, rivalRound, roundDish);
+      // Store round result in DB (p1 writes, p2 also writes same — deterministic so no conflict)
+      const existingResults = JSON.parse(duel.status==="playing"?duel.p1_rounds_vote||"[]":"[]");
+      const roundResultsArr = JSON.parse(duel.p2_rounds_vote>0?JSON.stringify([])||"[]":"[]");
+
+      // Use a dedicated approach: store in current_round field area via p2_scores trick
+      // Actually store in a new way: append to status field as JSON after "playing:"
+      const resultsKey = "results";
+      let storedResults = [];
+      try {
+        if(duel.status && duel.status.startsWith("playing:")) {
+          storedResults = JSON.parse(duel.status.slice(8));
+        }
+      } catch(e){}
+
+      const existingForRound = storedResults.find(r=>r.round===roundNum);
+      if(!existingForRound){
+        storedResults.push({round:roundNum, winner:roundWinner});
+        await patchDuel(id, {status:"playing:"+JSON.stringify(storedResults)});
+      }
+
+      // Recompute all scores from stored results
+      const newScores = storedResults.map(r=>r.winner);
+      renderDuelRoundResult(id, player, seeds, roundNum, totalRounds, newScores, myRound, rivalRound, roundDish, storedResults);
     }
   }, ()=>false);
 }
 
 // ── 7. ROUND RESULT ──
-function renderDuelRoundResult(id, player, seeds, roundNum, totalRounds, scores, myRound, rivalRound, roundDish) {
+function renderDuelRoundResult(id, player, seeds, roundNum, totalRounds, scores, myRound, rivalRound, roundDish, storedResults) {
   const el = document.getElementById("duel-content");
-  const lastResult = scores[scores.length-1];
-  const iWonRound = lastResult===player;
-  const isDraw    = lastResult==="draw";
-  const myTotal   = scores.filter(s=>s===player).length;
-  const rivalTotal= scores.filter(s=>s!==""&&s!==player&&s!=="draw").length;
+  // Use storedResults as source of truth for scoring
+  const results = storedResults || scores.map((s,i)=>({round:i+1,winner:s}));
+  const lastResult = results.find(r=>r.round===roundNum);
+  const roundWinner = lastResult ? lastResult.winner : "draw";
+  const iWonRound = roundWinner === player;
+  const isDraw    = roundWinner === "draw";
+  const rival     = player==="p1"?"p2":"p1";
+  const myTotal   = results.filter(r=>r.winner===player).length;
+  const rivalTotal= results.filter(r=>r.winner===rival).length;
+  const drawTotal = results.filter(r=>r.winner==="draw").length;
 
   el.innerHTML = `
     <div style="text-align:center;margin-bottom:1rem">
       <div style="font-size:36px;margin-bottom:.25rem">${isDraw?"🤝":iWonRound?"🏆":"😔"}</div>
       <div style="font-family:'Fraunces',serif;font-size:18px;font-weight:900;color:${isDraw?"var(--gold)":iWonRound?"var(--green)":"var(--red)"}">
-        ${isDraw?"¡Empate en esta ronda!":iWonRound?"¡Ganaste esta ronda!":"Tu rival ganó esta ronda"}
+        ${isDraw?"🤝 ¡Empate! +1 para los dos":iWonRound?"🏆 ¡Ganaste esta ronda!":"😔 Tu rival ganó esta ronda"}
       </div>
       <div style="font-size:12px;color:var(--text-muted);margin-top:.25rem">
         ${roundDish.flag} ${roundDish.country} · 
@@ -860,20 +897,30 @@ function renderDuelRoundResult(id, player, seeds, roundNum, totalRounds, scores,
   const finalBtn = document.getElementById("final-result-btn");
 
   if(nextBtn) nextBtn.addEventListener("click", ()=>{
-    renderDuelRound(id, player, seeds, roundNum+1, totalRounds, scores);
+    renderDuelRound(id, player, seeds, roundNum+1, totalRounds, results.map(r=>r.winner));
   });
   if(finalBtn) finalBtn.addEventListener("click", ()=>{
-    renderDuelFinalResult(id, player, scores, totalRounds);
+    renderDuelFinalResult(id, player, results.map(r=>r.winner), totalRounds);
   });
 }
 
 // ── 8. FINAL RESULT ──
-function renderDuelFinalResult(id, player, scores, totalRounds) {
+async function renderDuelFinalResult(id, player, scores, totalRounds) {
   const el = document.getElementById("duel-content");
-  const myTotal    = scores.filter(s=>s===player).length;
-  const rivalTotal = scores.filter(s=>s!==""&&s!==player&&s!=="draw").length;
-  const draws      = scores.filter(s=>s==="draw").length;
-  const iWon = myTotal > rivalTotal;
+  el.innerHTML = `<div style="text-align:center;padding:2rem;color:var(--text-muted);font-size:13px">Calculando resultado final...</div>`;
+
+  // Fetch final state from DB as source of truth
+  const duel = await getDuel(id).catch(()=>null);
+  let results = [];
+  if(duel && duel.status && duel.status.startsWith("playing:")) {
+    try { results = JSON.parse(duel.status.slice(8)); } catch(e){}
+  }
+
+  const rival = player==="p1"?"p2":"p1";
+  const myTotal    = results.filter(r=>r.winner===player).length;
+  const rivalTotal = results.filter(r=>r.winner===rival).length;
+  const draws      = results.filter(r=>r.winner==="draw").length;
+  const iWon  = myTotal > rivalTotal;
   const isTie = myTotal === rivalTotal;
 
   el.innerHTML = `
@@ -1127,7 +1174,7 @@ function loadInfiniteDish(infDish) {
   const MAX = getMaxAttempts();
   const infOpts = cfg.moreCountries
     ? shuffleWithSeed(ALL_COUNTRIES, Math.floor(Math.random()*99999))
-    : shuffleWithSeed([infDish.country, ...infDish.dist], Math.floor(Math.random()*99999));
+    : shuffleWithSeed([infDish.country, ...infDish.dist], infDish.name.split("").reduce((a,c)=>a+c.charCodeAt(0),0) * 7919 ^ SESSION_SEED);
 
   let infLog = [], infWrong = new Set(), infDone = false;
 
