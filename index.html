@@ -152,6 +152,22 @@
     .ranking-btn:hover{border-color:var(--accent);color:var(--accent)}
     .ranking-btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
     .ranking-btn.primary:hover{opacity:.88}
+    /* Stats */
+    .stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:1rem}
+    .stat-card{background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-sm);padding:.875rem;text-align:center}
+    .stat-card-num{font-family:'Fraunces',serif;font-size:28px;font-weight:900;color:var(--text);line-height:1}
+    .stat-card-label{font-size:11px;color:var(--text-muted);margin-top:4px;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+    .stat-card.accent .stat-card-num{color:var(--accent)}
+    .stat-card.gold .stat-card-num{color:var(--gold)}
+    .stat-card.green .stat-card-num{color:var(--green)}
+    .attempts-chart{margin-bottom:1rem}
+    .attempts-chart-title{font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:.08em;text-transform:uppercase;margin-bottom:.625rem}
+    .bar-row{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+    .bar-label{font-size:12px;color:var(--text-muted);width:14px;text-align:right;flex-shrink:0}
+    .bar-track{flex:1;background:var(--surface2);border-radius:99px;height:18px;overflow:hidden;position:relative}
+    .bar-fill{height:100%;border-radius:99px;background:var(--accent);transition:width .6s cubic-bezier(.4,0,.2,1);display:flex;align-items:center;justify-content:flex-end;padding-right:6px;min-width:0}
+    .bar-count{font-size:11px;font-weight:700;color:#fff;white-space:nowrap}
+    .bar-fill.zero{background:var(--surface2)}
     .ranking-empty{text-align:center;padding:2rem;color:var(--text-muted);font-size:13px}
     /* Side Menu */
     .side-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:200;opacity:0;pointer-events:none;transition:opacity .3s}
@@ -237,20 +253,14 @@
       <div class="setting-info"><div class="setting-label">Ocultar descripción</div><div class="setting-desc">Esconde la descripción del plato. Solo ves el nombre y el emoji.</div></div>
       <label class="toggle"><input type="checkbox" id="no-desc-toggle"><div class="toggle-track"></div></label>
     </div>
-    <div class="modal-divider"></div>
-    <div class="settings-section-label">📊 Estadísticas</div>
-    <div class="setting-row">
-      <div class="setting-info"><div class="setting-label">Mostrar estadísticas arriba</div><div class="setting-desc">Racha, victorias y partidas jugadas aparecen encima del plato del día.</div></div>
-      <label class="toggle"><input type="checkbox" id="stats-top-toggle"><div class="toggle-track"></div></label>
-    </div>
-    <div class="setting-row">
-      <div class="setting-info"><div class="setting-label">Mostrar estadísticas abajo</div><div class="setting-desc">Las estadísticas aparecen debajo del juego, al final de la página.</div></div>
-      <label class="toggle"><input type="checkbox" id="stats-bottom-toggle"><div class="toggle-track"></div></label>
-    </div>
-    <div class="setting-row">
-      <div class="setting-info"><div class="setting-label">Plato de ayer</div><div class="setting-desc">Muestra el plato de ayer y tu resultado justo encima del plato de hoy.</div></div>
-      <label class="toggle"><input type="checkbox" id="show-yesterday-toggle" checked><div class="toggle-track"></div></label>
-    </div>
+
+```
+<div class="setting-row">
+  <div class="setting-info"><div class="setting-label">Plato de ayer</div><div class="setting-desc">Muestra el plato de ayer y tu resultado justo encima del plato de hoy.</div></div>
+  <label class="toggle"><input type="checkbox" id="show-yesterday-toggle" checked><div class="toggle-track"></div></label>
+</div>
+```
+
   </div>
 </div>
 
@@ -296,7 +306,6 @@
       <h1>¿De dónde es esta comida?</h1>
       <p id="subtitle-attempts">Adivina el país de origen — 6 intentos</p>
     </div>
-    <div class="stats-bar" id="stats-bar"></div>
     <div id="yesterday-card"></div>
     <div class="dish-card">
       <span class="dish-emoji" id="dish-emoji"></span>
@@ -331,6 +340,13 @@
   </div>
   <div class="side-menu-section">
     <div class="side-menu-label">Comunidad</div>
+    <button class="side-menu-item" id="sm-stats">
+      <div class="side-menu-item-icon">📊</div>
+      <div class="side-menu-item-info">
+        <div class="side-menu-item-name">Mis Estadísticas</div>
+        <div class="side-menu-item-desc">Tu racha, victorias y gráfica de intentos</div>
+      </div>
+    </button>
     <button class="side-menu-item" id="sm-ranking">
       <div class="side-menu-item-icon">🏆</div>
       <div class="side-menu-item-info">
@@ -340,6 +356,16 @@
     </button>
   </div>
   <div class="side-menu-footer">Hecho con 🌶️ por <strong style="color:#FFF3E0">Anas</strong></div>
+</div>
+
+<!-- STATS MODAL -->
+
+<div class="modal-overlay hidden" id="stats-modal">
+  <div class="modal">
+    <button class="modal-close" id="stats-close">✕</button>
+    <div class="modal-title">📊 Mis Estadísticas</div>
+    <div id="stats-content"></div>
+  </div>
 </div>
 
 <!-- DUEL MODAL -->
@@ -363,8 +389,6 @@
     <div id="ranking-list"><div class="ranking-empty">Cargando ranking...</div></div>
   </div>
 </div>
-
-<div id="stats-bar-bottom" style="max-width:520px;margin:0 auto;padding:0 1.25rem 1.5rem"></div>
 
 <footer>
   <div class="footer-inner">
@@ -1004,12 +1028,7 @@ function statsHTML(){
   const pct=streakData.played>0?Math.round(streakData.wins/streakData.played*100):0;
   return `<div class="stats-bar"><div class="stat-pill streak"><div class="stat-num">🔥${streakData.streak}</div><div class="stat-label">Racha</div></div><div class="stat-pill"><div class="stat-num">${streakData.best}</div><div class="stat-label">Mejor racha</div></div><div class="stat-pill"><div class="stat-num">${pct}%</div><div class="stat-label">Victorias</div></div><div class="stat-pill"><div class="stat-num">${streakData.played}</div><div class="stat-label">Jugados</div></div></div>`;
 }
-function renderStats(){
-  const top=document.getElementById("stats-bar");
-  const bot=document.getElementById("stats-bar-bottom");
-  top.innerHTML=cfg.statsTop?statsHTML():"";
-  bot.innerHTML=cfg.statsBottom?statsHTML():"";
-}
+function renderStats(){}
 
 function renderYesterday(){
   const el=document.getElementById("yesterday-card");
@@ -1085,7 +1104,8 @@ function handleGuess(c,btn){
 let shareText="";
 function showResult(won,animate){
   const resultEl=document.getElementById("result");if(resultEl.querySelector(".result-box"))return;
-  updateStreak(won);renderStats();syncRanking();
+  updateStreak(won);syncRanking();
+  if(animate){recordAttempt(won, log.length);}
   if(animate){if(won){setTimeout(()=>{launchConfetti();playWin();},300);}else{setTimeout(()=>playLose(),300);}}
   const emojiStr=log.map(g=>g?"🟩":"🟥").join("");
   const streakLine=won&&streakData.streak>1?`🔥 Racha de ${streakData.streak} días`:"";
@@ -1094,7 +1114,7 @@ function showResult(won,animate){
   const hardLine=hardCount>0?"\n"+`🔥 Modo difícil x${hardCount}`:"";
   shareText=`🌶️ Comidadle — ${dish.name}\n${emojiStr}\n${line}${streakLine?" · "+streakLine:""}${hardLine}\n👉 aanas440.github.io/comidadle`;
   const box=document.createElement("div");box.className="result-box";if(!animate)box.style.animation="none";
-  box.innerHTML=`<span class="result-big">${won?"🎉":"😔"}</span><div class="result-title">${won?`¡Correcto! Es ${dish.flag} ${dish.country}`:`Era ${dish.flag} ${dish.country}`}</div><div class="result-sub">${won?`¡Acertaste en ${log.length} intento${log.length!==1?"s":""}!`:"¡Mañana más! Vuelve para un nuevo plato."}</div><div class="emoji-row">${emojiStr}</div>${streakData.streak>1?`<div style="font-size:13px;color:var(--accent);font-weight:600;margin-bottom:.75rem">🔥 Racha de ${streakData.streak} días</div>`:""}<div class="countdown-box"><div class="countdown-label">Próximo plato en</div><div class="countdown-time" id="countdown-time">--:--:--</div></div><button class="share-btn" id="share-btn" style="margin-top:.5rem"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>Compartir resultado</button><button class="infinite-btn" id="start-infinite-btn" style="margin-top:.5rem">♾️ ¿Seguir jugando? Modo Infinito</button>`;
+  box.innerHTML=`<span class="result-big">${won?"🎉":"😔"}</span><div class="result-title">${won?`¡Correcto! Es ${dish.flag} ${dish.country}`:`Era ${dish.flag} ${dish.country}`}</div><div class="result-sub">${won?`¡Acertaste en ${log.length} intento${log.length!==1?"s":""}!`:"¡Mañana más! Vuelve para un nuevo plato."}</div>${(()=>{const ad=getAttemptsData();const mx=Math.max(...[1,2,3,4,5,6].map(n=>ad[n]||0),ad.fail||0,1);return'<div class="attempts-chart" style="margin:.75rem 0 .5rem"><div class="attempts-chart-title">Distribución de intentos</div>'+[1,2,3,4,5,6].map(n=>{const v=ad[n]||0,w=mx>0?Math.round((v/mx)*100):0,cur=won&&log.length===n;return`<div class="bar-row"><div class="bar-label" style="font-size:11px">${n}</div><div class="bar-track" style="height:14px"><div class="bar-fill${v===0?" zero":""}" style="width:${Math.max(w,v>0?8:0)}%;${cur?"background:var(--green)":""}">${v>0?`<span class="bar-count" style="font-size:10px">${v}</span>`:""}</div></div></div>`}).join("")+'</div>';})()}<div class="emoji-row">${emojiStr}</div>${streakData.streak>1?`<div style="font-size:13px;color:var(--accent);font-weight:600;margin-bottom:.75rem">🔥 Racha de ${streakData.streak} días</div>`:""}<div class="countdown-box"><div class="countdown-label">Próximo plato en</div><div class="countdown-time" id="countdown-time">--:--:--</div></div><button class="share-btn" id="share-btn" style="margin-top:.5rem"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>Compartir resultado</button><button class="infinite-btn" id="start-infinite-btn" style="margin-top:.5rem">♾️ ¿Seguir jugando? Modo Infinito</button>`;
   resultEl.appendChild(box);
   document.getElementById("share-btn").addEventListener("click",openShareModal);
   // Ask for notifications after finishing daily game
@@ -1140,9 +1160,12 @@ function closeSideMenu() {
 document.getElementById("menu-open-btn").addEventListener("click", openSideMenu);
 document.getElementById("side-menu-close").addEventListener("click", closeSideMenu);
 document.getElementById("side-overlay").addEventListener("click", closeSideMenu);
+document.getElementById("sm-stats").addEventListener("click", () => { closeSideMenu(); openStats(); });
 document.getElementById("sm-duel").addEventListener("click", () => { closeSideMenu(); openDuel(); });
 document.getElementById("sm-ranking").addEventListener("click", () => { closeSideMenu(); openRanking(); });
 
+document.getElementById("stats-close").addEventListener("click",()=>closeModal("stats-modal"));
+document.getElementById("stats-modal").addEventListener("click",e=>{if(e.target.id==="stats-modal")closeModal("stats-modal")});
 document.getElementById("duel-close").addEventListener("click",()=>closeModal("duel-modal"));
 document.getElementById("duel-modal").addEventListener("click",e=>{if(e.target.id==="duel-modal")closeModal("duel-modal")});
 document.getElementById("ranking-close").addEventListener("click",()=>closeModal("ranking-modal"));
@@ -1471,24 +1494,90 @@ async function askNotificationPermission() {
   });
 }
 
+// ═══════════════════════════════════════════════════════════
+// ESTADÍSTICAS DETALLADAS
+// ═══════════════════════════════════════════════════════════
+const ATTEMPTS_KEY = "comidadle_attempts";
+
+function getAttemptsData() {
+  try { return JSON.parse(localStorage.getItem(ATTEMPTS_KEY)) || {1:0,2:0,3:0,4:0,5:0,6:0,fail:0}; }
+  catch(e) { return {1:0,2:0,3:0,4:0,5:0,6:0,fail:0}; }
+}
+
+function recordAttempt(won, attempts) {
+  const data = getAttemptsData();
+  if (won) data[attempts] = (data[attempts] || 0) + 1;
+  else data.fail = (data.fail || 0) + 1;
+  try { localStorage.setItem(ATTEMPTS_KEY, JSON.stringify(data)); } catch(e) {}
+}
+
+function openStats() {
+  openModal("stats-modal");
+  renderStatsContent();
+}
+
+function renderStatsContent() {
+  const el = document.getElementById("stats-content");
+  const streak = streakData;
+  const pct = streak.played > 0 ? Math.round(streak.wins / streak.played * 100) : 0;
+  const attData = getAttemptsData();
+  const maxVal = Math.max(...[1,2,3,4,5,6].map(n => attData[n]||0), attData.fail||0, 1);
+
+  const bars = [1,2,3,4,5,6].map(n => {
+    const val = attData[n] || 0;
+    const w = maxVal > 0 ? Math.round((val/maxVal)*100) : 0;
+    return `<div class="bar-row">
+      <div class="bar-label">${n}</div>
+      <div class="bar-track">
+        <div class="bar-fill${val===0?" zero":""}" style="width:${Math.max(w,val>0?8:0)}%">
+          ${val > 0 ? `<span class="bar-count">${val}</span>` : ""}
+        </div>
+      </div>
+    </div>`;
+  }).join("");
+
+  const failVal = attData.fail || 0;
+  const failW = maxVal > 0 ? Math.round((failVal/maxVal)*100) : 0;
+  const failBar = `<div class="bar-row">
+    <div class="bar-label" style="color:var(--red)">✗</div>
+    <div class="bar-track">
+      <div class="bar-fill${failVal===0?" zero":""}" style="width:${Math.max(failW,failVal>0?8:0)}%;background:${failVal>0?"var(--red)":"var(--surface2)"}">
+        ${failVal > 0 ? `<span class="bar-count">${failVal}</span>` : ""}
+      </div>
+    </div>
+  </div>`;
+
+  el.innerHTML = `
+    <div class="stats-grid">
+      <div class="stat-card accent">
+        <div class="stat-card-num">🔥${streak.streak}</div>
+        <div class="stat-card-label">Racha actual</div>
+      </div>
+      <div class="stat-card gold">
+        <div class="stat-card-num">${streak.best}</div>
+        <div class="stat-card-label">Mejor racha</div>
+      </div>
+      <div class="stat-card green">
+        <div class="stat-card-num">${pct}%</div>
+        <div class="stat-card-label">% Victorias</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-num">${streak.played}</div>
+        <div class="stat-card-label">Partidas</div>
+      </div>
+    </div>
+    <div class="attempts-chart">
+      <div class="attempts-chart-title">Distribución de intentos</div>
+      ${bars}
+      ${failBar}
+    </div>
+    ${streak.played === 0 ? `<div style="text-align:center;font-size:13px;color:var(--text-muted);padding:1rem">¡Juega tu primera partida para ver tus estadísticas! 🌶️</div>` : ""}`;
+}
+
 const toggleMap={"few-attempts-toggle":"fewAttempts","more-countries-toggle":"moreCountries","no-hints-toggle":"noHints","prog-toggle":"progressive","no-desc-toggle":"noDesc"};
 Object.entries(toggleMap).forEach(([elId,key])=>{const el=document.getElementById(elId);el.checked=cfg[key];el.addEventListener("change",()=>{cfg[key]=el.checked;saveCfg();updateBadge();renderAll()})});
 
-// Stats position toggles (mutually exclusive)
-const stTop=document.getElementById("stats-top-toggle");
-const stBot=document.getElementById("stats-bottom-toggle");
-stTop.checked=cfg.statsTop;
-stBot.checked=cfg.statsBottom;
-stTop.addEventListener("change",()=>{
-  cfg.statsTop=stTop.checked;
-  if(stTop.checked){cfg.statsBottom=false;stBot.checked=false;}
-  saveCfg();renderStats();
-});
-stBot.addEventListener("change",()=>{
-  cfg.statsBottom=stBot.checked;
-  if(stBot.checked){cfg.statsTop=false;stTop.checked=false;}
-  saveCfg();renderStats();
-});
+
 const syEl=document.getElementById("show-yesterday-toggle");
 syEl.checked=cfg.showYesterday;
 syEl.addEventListener("change",()=>{cfg.showYesterday=syEl.checked;saveCfg();renderYesterday();});
